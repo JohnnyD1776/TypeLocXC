@@ -210,9 +210,7 @@ func mapSpecifierToType(_ specifier: String) -> String {
 func generateParameters(for specifiers: [String]) -> String {
   specifiers.enumerated().map { (index, specifier) in
     let type = mapSpecifierToType(specifier)
-    if type.isEmpty { // Handle %%
-      return ""
-    }
+    if type.isEmpty { return "" }
     return "p\(index + 1): \(type)"
   }
   .filter { !$0.isEmpty } // Remove empty entries (e.g., for %%)
@@ -227,7 +225,41 @@ func generateArguments(for specifiers: [String]) -> String {
     .joined(separator: ", ")
 }
 
-// Start building the output
+// Generate a function for plural strings
+func generatePluralFunction(for key: String, pluralData: [String: Any], output: inout String) {
+  let countParam = "count: Int"
+  // Assume all plural variations have the same specifiers; use the first category to detect them
+  if let firstCategory = pluralData.keys.first,
+     let categoryData = pluralData[firstCategory] as? [String: Any],
+     let stringUnit = categoryData["stringUnit"] as? [String: String],
+     let stringValue = stringUnit["value"] {
+    let specifiers = extractSpecifiers(from: stringValue)
+    let additionalParams = generateParameters(for: specifiers)
+    let arguments = generateArguments(for: specifiers)
+    let params = [countParam] + (additionalParams.isEmpty ? [] : [additionalParams])
+    let paramString = params.joined(separator: ", ")
+    let argList = ["count"] + (arguments.isEmpty ? [] : [arguments])
+
+    output += """
+        
+    static func \(key)(\(paramString)) -> String {
+        let format = NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
+        return String.localizedStringWithFormat(format, \(argList.joined(separator: ", ")))
+    }
+"""
+  } else {
+    output += """
+        
+    static func \(key)(\(countParam)) -> String {
+        let format = NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
+        return String.localizedStringWithFormat(format, count)
+    }
+"""
+  }
+}
+
+// MARK: - Output Generation
+
 var output = """
 // Auto-generated file for type-safe access to .xcstrings
 import Foundation
@@ -238,8 +270,8 @@ import Foundation
 /// The `L10n` enum provides functions for each string key in `Localizable.xcstrings`.
 /// - Keys with dots (e.g., "GameOver.backToMain") are converted to underscores (e.g., `GameOver_backToMain`).
 /// - For simple strings without format specifiers, the function takes no parameters.
-/// - For strings with format specifiers (`%d`, `%@`, `%f`), the function includes labeled parameters (`p1`, `p2`, etc.) with types `Int`, `String`, `Float`, respectively.
-/// - For plural strings defined with variations in `.xcstrings`, pass the count as the first parameter (typically `p1: Int`).
+/// - For strings with format specifiers (`%d`, `%@`, `%f`), the function includes labeled parameters (`p1`, `p2`, etc.) with types `Int`, `String`, `Double`, respectively.
+/// - For plural strings defined with variations in `.xcstrings`, pass the count as the first parameter (`count: Int`), followed by additional parameters if needed.
 ///
 /// Example usage:
 /// ```swift
@@ -249,18 +281,16 @@ import Foundation
 /// // Parameterized string
 /// let score = L10n.HUD_Label_score(p1: 42)   // "Score: 42"
 ///
-/// // Plural string (assuming "apple_count" is defined with plurals)
-/// let oneApple = L10n.apple_count(p1: 1)     // "1 apple"
-/// let manyApples = L10n.apple_count(p1: 5)   // "5 apples"
+/// // Plural string (assuming "apple_count" is<|control374|> with plurals)
+/// let oneApple = L10n.apple_count(count: 1)     // "1 apple"
+/// let manyApples = L10n.apple_count(count: 5)   // "5 apples"
 /// ```
 ///
 /// Supported format specifiers:
-/// - `%@ : `String`
-/// - `%d`, `%i` : `Int`
-/// - `%f` : `Double`
-/// - `%s` : `String` (C-style string)
-///
-/// Ensure `Localizable.xcstrings` is up-to-date in your project.
+/// - `%@`: `String`
+/// - `%d`, `%i`: `Int`
+/// - `%f`: `Double`
+/// - `%s`: `String` (C-style string)
 
 enum L10n {
 """
@@ -269,31 +299,38 @@ enum L10n {
 for (key, value) in strings {
   guard let valueDict = value as? [String: Any],
         let localizations = valueDict["localizations"] as? [String: Any],
-        let enLocalization = localizations["en"] as? [String: Any],
-        let stringUnit = enLocalization["stringUnit"] as? [String: String],
-        let stringValue = stringUnit["value"] else {
+        let enLocalization = localizations["en"] as? [String: Any] else {
     continue
   }
 
-  let specifiers = extractSpecifiers(from: stringValue)
-  let safeKey = key.replacingOccurrences(of: ".", with: "_") // Replace dots for valid Swift identifiers
-  let parameters = generateParameters(for: specifiers)
-  let arguments = generateArguments(for: specifiers)
+  let safeKey = key.replacingOccurrences(of: ".", with: "_")
 
-  if specifiers.isEmpty {
-    output += """
-        
+  if let variation = enLocalization["variation"] as? [String: Any],
+     let plural = variation["plural"] as? [String: Any] {
+    // Handle plural strings
+    generatePluralFunction(for: safeKey, pluralData: plural, output: &output)
+  } else if let stringUnit = enLocalization["stringUnit"] as? [String: String],
+            let stringValue = stringUnit["value"] {
+    // Handle simple or formatted strings
+    let specifiers = extractSpecifiers(from: stringValue)
+    let parameters = generateParameters(for: specifiers)
+    let arguments = generateArguments(for: specifiers)
+
+    if specifiers.isEmpty {
+      output += """
+          
     static func \(safeKey)() -> String {
         return NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
     }
 """
-  } else {
-    output += """
-        
+    } else {
+      output += """
+          
     static func \(safeKey)(\(parameters)) -> String {
         return String(format: NSLocalizedString("\(key)", tableName: "Localizable", comment: ""), \(arguments))
     }
 """
+    }
   }
 }
 
@@ -307,8 +344,8 @@ do {
   fatalError("Failed to write to \(outputFilePath): \(error)")
 }
 
+// MARK: - Help Message
 
-// Add this at the top of the argument parsing section, before the while loop
 func helpMessage() -> String { """
 Usage: TypeLocXC [OPTIONS] [SOURCE DESTINATION]
 
