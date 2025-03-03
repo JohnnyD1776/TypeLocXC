@@ -180,7 +180,8 @@ guard let data = try? Data(contentsOf: URL(fileURLWithPath: xcstringsPath)),
 
 // Extract format specifiers from a string
 func extractSpecifiers(from string: String) -> [String] {
-  let regex = try! NSRegularExpression(pattern: "%d|%@|%f")
+  // Updated regex to match common printf-style specifiers
+  let regex = try! NSRegularExpression(pattern: "%[@cdiouxXeEfFgGaAsSpn%]")
   let matches = regex.matches(in: string, options: [], range: NSRange(string.startIndex..., in: string))
   return matches.map { String(string[Range($0.range, in: string)!]) }
 }
@@ -188,30 +189,42 @@ func extractSpecifiers(from string: String) -> [String] {
 // Map specifiers to Swift types
 func mapSpecifierToType(_ specifier: String) -> String {
   switch specifier {
-  case "%d": return "Int"
-  case "%@": return "String"
-  case "%f": return "Float"
-  default: return "Any" // Fallback (shouldn’t occur with current specifiers)
+  case "%@": return "String"           // Objects (NSString, etc.)
+  case "%c": return "Character"       // Single character
+  case "%d", "%i": return "Int"       // Signed integers
+  case "%o", "%u": return "UInt"      // Unsigned integers
+  case "%x", "%X": return "UInt"      // Hexadecimal (treated as unsigned)
+  case "%e", "%E", "%f", "%F": return "Double" // Floating-point (Double for precision)
+  case "%g", "%G": return "Double"    // General floating-point
+  case "%a", "%A": return "Double"    // Hex floating-point
+  case "%s": return "String"          // C-style string
+  case "%p": return "UnsafeRawPointer" // Pointer (rare in localization)
+  case "%%": return ""                // Literal %, no parameter needed
+  default:
+    print("Warning: Unknown specifier '\(specifier)', defaulting to Any")
+    return "Any"                    // Fallback for unrecognized specifiers
   }
 }
 
 // Generate labeled parameters (e.g., "p1: Int, p2: String")
 func generateParameters(for specifiers: [String]) -> String {
-  return specifiers.enumerated().map { (index, specifier) in
-    switch specifier {
-    case "%d": return "p\(index + 1): Int"
-    case "%@": return "p\(index + 1): String"
-    case "%f": return "p\(index + 1): Float"
-    default: return ""
+  specifiers.enumerated().map { (index, specifier) in
+    let type = mapSpecifierToType(specifier)
+    if type.isEmpty { // Handle %%
+      return ""
     }
-  }.joined(separator: ", ")
+    return "p\(index + 1): \(type)"
+  }
+  .filter { !$0.isEmpty } // Remove empty entries (e.g., for %%)
+  .joined(separator: ", ")
 }
 
 // Generate arguments for String(format:) (e.g., "p1, p2")
 func generateArguments(for specifiers: [String]) -> String {
-  specifiers.enumerated().map { index, _ in
-    "p\(index + 1)"
-  }.joined(separator: ", ")
+  specifiers.enumerated()
+    .filter { mapSpecifierToType($1) != "" } // Exclude %% (no parameter)
+    .map { index, _ in "p\(index + 1)" }
+    .joined(separator: ", ")
 }
 
 // Start building the output
