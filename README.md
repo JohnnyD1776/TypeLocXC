@@ -51,7 +51,7 @@ If no arguments or config file are provided:
 - If no config is found, it defaults to the first `.xcstrings` file it finds and outputs to `Resources/Strings+Generated.swift`.
 - If the `Resources` folder doesn't exist, the script creates it.
 
-## Usage of L1on Enum
+## Usage of L10n Enum
 
 #### Example Usage
 For an `.xcstrings` entry:
@@ -64,9 +64,9 @@ For an `.xcstrings` entry:
 }
 ``
 
-The generated `L1on` enum allows:
+The generated `L10n` enum allows:
 ``swift
-let message = L1on.greeting("World") // Returns "Hello, World!"
+let message = L10n.greeting("World") // Returns "Hello, World!"
 ``
 
 #### Supported Format Specifiers
