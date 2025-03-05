@@ -4,6 +4,7 @@ import Yams
 // MARK: - Argument Parsing
 
 let arguments = Array(CommandLine.arguments.dropFirst()) // Exclude executable name
+var pluginMode = false
 var sourceArg: String?
 var destinationArg: String?
 var configArg: String?
@@ -12,31 +13,37 @@ var positionalArgs: [String] = []
 var i = 0
 while i < arguments.count {
   let arg = arguments[i]
-
-  if arg == "--help" || arg == "-?" {
-    print("HELP OUTPUT:")
-    print(helpMessage())
-    fflush(stdout) // Ensure output is flushed
-    exit(0)
-  }
-
-  if arg == "--source", i + 1 < arguments.count {
+  switch arg {
+  case "--help", "-?":
+      print("HELP OUTPUT:")
+      print(helpMessage())
+      fflush(stdout) // Ensure output is flushed
+      exit(0)
+  case "--plugin-mode":
+    pluginMode = true
+    i += 1
+  case "--source" where i + 1 < arguments.count:
     sourceArg = arguments[i + 1]
     i += 2
-  } else if arg == "--destination", i + 1 < arguments.count {
+  case "--destination" where i + 1 < arguments.count:
     destinationArg = arguments[i + 1]
     i += 2
-  } else if arg == "--config", i + 1 < arguments.count {
+  case "--config" where i + 1 < arguments.count:
     configArg = arguments[i + 1]
     i += 2
-  } else if arg.hasPrefix("--") {
-    print("Unknown flag: \(arg)")
-    exit(1)
-  } else {
-    positionalArgs.append(arg)
-    i += 1
+  default:
+    if arg.hasPrefix("--") {
+      print("Unknown flag: \(arg)")
+      exit(1)
+    } else {
+      positionalArgs.append(arg)
+      i += 1
+    }
   }
+
 }
+
+
 
 print("Arguments received: \(CommandLine.arguments)")
 
@@ -119,18 +126,21 @@ func validateSource(_ path: String?) -> String {
 }
 
 /// Validates and sets the destination path, ensuring it's within project root.
-func validateDestination(_ path: String?, projectRoot: String) -> String {
+func validateDestination(_ path: String?, projectRoot: String, pluginMode: Bool) -> String {
   let destination = path ?? setupDefaultDestination()
   let absoluteDestination = (destination as NSString).isAbsolutePath ? destination : "\(projectRoot)/\(destination)"
   let outputDirectory = (absoluteDestination as NSString).deletingLastPathComponent
 
-  // Check if destination is within project root
-  let projectRootURL = URL(fileURLWithPath: projectRoot).standardized
-  let outputDirURL = URL(fileURLWithPath: outputDirectory).standardized
-  guard outputDirURL.path.hasPrefix(projectRootURL.path) else {
-    fatalError("Destination directory '\(outputDirectory)' is outside project root '\(projectRoot)'.")
+  // Only enforce project root check if not in plugin mode
+  if !pluginMode {
+    let projectRootURL = URL(fileURLWithPath: projectRoot).standardized
+    let outputDirURL = URL(fileURLWithPath: outputDirectory).standardized
+    guard outputDirURL.path.hasPrefix(projectRootURL.path) else {
+      fatalError("Destination directory '\(outputDirectory)' is outside project root '\(projectRoot)'.")
+    }
   }
 
+  // Create the output directory if it doesn’t exist
   if !FileManager.default.fileExists(atPath: outputDirectory) {
     do {
       try FileManager.default.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
@@ -162,7 +172,7 @@ if let configPath = configArg, let (source, destination) = loadConfig(from: conf
 
 // Step 2: Validate and override with source and destination arguments
 xcstringsPath = validateSource(sourceArg)
-outputFilePath = validateDestination(destinationArg, projectRoot: projectRoot)
+outputFilePath = validateDestination(destinationArg, projectRoot: projectRoot, pluginMode: pluginMode)
 
 print("Using source: \(xcstringsPath)")
 print("Using destination: \(outputFilePath)")
