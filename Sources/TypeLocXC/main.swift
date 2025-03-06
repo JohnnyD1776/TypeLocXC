@@ -1,5 +1,6 @@
 import Foundation
 import Yams
+import CryptoKit
 
 // MARK: - Argument Parsing
 
@@ -15,10 +16,10 @@ while i < arguments.count {
   let arg = arguments[i]
   switch arg {
   case "--help", "-?":
-      print("HELP OUTPUT:")
-      print(helpMessage())
-      fflush(stdout) // Ensure output is flushed
-      exit(0)
+    print("HELP OUTPUT:")
+    print(helpMessage())
+    fflush(stdout)
+    exit(0)
   case "--plugin-mode":
     pluginMode = true
     i += 1
@@ -40,10 +41,7 @@ while i < arguments.count {
       i += 1
     }
   }
-
 }
-
-
 
 print("Arguments received: \(CommandLine.arguments)")
 
@@ -51,9 +49,9 @@ print("Arguments received: \(CommandLine.arguments)")
 
 var xcstringsPath: String = ""
 var outputFilePath: String = ""
-let projectRoot = FileManager.default.currentDirectoryPath // Assume script runs from project root
+let projectRoot = FileManager.default.currentDirectoryPath
 
-// MARK: - Configuration Functions
+// MARK: - Helper Functions
 
 /// Loads source and destination from a config file.
 func loadConfig(from path: String, isArg: Bool? = nil) -> (source: String, destination: String)? {
@@ -82,31 +80,84 @@ func loadConfig(from path: String, isArg: Bool? = nil) -> (source: String, desti
   }
 }
 
-/// Finds the first .xcstrings file in the project root or subdirectories.
-func findDefaultSource() -> String? {
-  let enumerator = FileManager.default.enumerator(atPath: projectRoot)
-  while let file = enumerator?.nextObject() as? String {
-    if file.hasSuffix(".xcstrings") {
-      print("Found Localized Strings file: \(file)")
-      return "\(projectRoot)/\(file)"
-    }
-  }
-  return nil
+/// Checks if the current directory is the project root by looking for .xcodeproj.
+func isProjectRoot(_ directory: String) -> Bool {
+  let contents = try? FileManager.default.contentsOfDirectory(atPath: directory)
+  return contents?.contains(where: { $0.hasSuffix(".xcodeproj") }) ?? false
 }
 
-/// Sets up the default destination path.
-func setupDefaultDestination() -> String {
-  let defaultPath = "\(projectRoot)/Resources/Strings+Generated.swift"
-  let resourcesDir = "\(projectRoot)/Resources"
-  if !FileManager.default.fileExists(atPath: resourcesDir) {
-    do {
-      try FileManager.default.createDirectory(atPath: resourcesDir, withIntermediateDirectories: true)
-      print("Created Resources directory at: \(resourcesDir)")
-    } catch {
-      fatalError("Error creating Resources directory: \(error)")
+/// Finds all .xcstrings files in the project root and subdirectories.
+func findAllXCStringsFiles(in directory: String) -> [String] {
+  var xcstringsFiles: [String] = []
+  let enumerator = FileManager.default.enumerator(atPath: directory)
+  while let file = enumerator?.nextObject() as? String {
+    if file.hasSuffix(".xcstrings") {
+      xcstringsFiles.append("\(directory)/\(file)")
     }
   }
-  return defaultPath
+  return xcstringsFiles
+}
+
+/// Finds all +generated.swift files in the project root and subdirectories.
+func findAllGeneratedFiles(in directory: String) -> [String] {
+  var generatedFiles: [String] = []
+  let enumerator = FileManager.default.enumerator(atPath: directory)
+  while let file = enumerator?.nextObject() as? String {
+    if file.hasSuffix("+generated.swift") {
+      generatedFiles.append("\(directory)/\(file)")
+    }
+  }
+  return generatedFiles
+}
+
+/// Computes SHA256 checksum of a file.
+func computeSHA256(of file: String) -> String? {
+  guard let data = try? Data(contentsOf: URL(fileURLWithPath: file)) else {
+    return nil
+  }
+  let hash = SHA256.hash(data: data)
+  return hash.compactMap { String(format: "%02x", $0) }.joined()
+}
+
+/// Extracts checksum from the generated file and returns it along with the source path.
+func extractChecksumAndSource(from outputFile: String) -> (checksum: String?, sourcePath: String?) {
+  guard let content = try? String(contentsOfFile: outputFile),
+        let firstLine = content.components(separatedBy: .newlines).first,
+        firstLine.hasPrefix("// Checksum: "),
+        let secondLine = content.components(separatedBy: .newlines).dropFirst().first,
+        secondLine.hasPrefix("// Generated from: ") else {
+    return (nil, nil)
+  }
+  let checksum = firstLine.replacingOccurrences(of: "// Checksum: ", with: "").trimmingCharacters(in: .whitespaces)
+  let sourcePath = secondLine.replacingOccurrences(of: "// Generated from: ", with: "").trimmingCharacters(in: .whitespaces)
+  return (checksum, sourcePath)
+}
+
+/// Determines if the output file should be regenerated based on checksum and source path.
+func shouldGenerate(xcstringsFile: String, existingGeneratedFiles: [String]) -> (needsGeneration: Bool, outputFile: String) {
+  let expectedFilename = (((xcstringsFile as NSString).lastPathComponent as NSString).deletingPathExtension) + "+generated.swift"
+  for generatedFile in existingGeneratedFiles {
+    let filename = (generatedFile as NSString).lastPathComponent
+    if filename == expectedFilename {
+      let checksumAndSource = extractChecksumAndSource(from: generatedFile)
+      if let storedSourcePath = checksumAndSource.sourcePath, storedSourcePath == xcstringsFile {
+        // Found a generated file for this xcstringsFile with matching filename and source path
+        guard let storedChecksum = checksumAndSource.checksum,
+              let currentChecksum = computeSHA256(of: xcstringsFile) else {
+          return (true, generatedFile) // Regenerate if checksums can't be computed
+        }
+        if storedChecksum != currentChecksum {
+          return (true, generatedFile) // Checksums differ, regenerate in place
+        } else {
+          return (false, generatedFile) // Up to date, no need to regenerate
+        }
+      }
+    }
+  }
+  // No matching generated file found, generate a new one in the same directory
+  let directory = (xcstringsFile as NSString).deletingLastPathComponent
+  let outputFile = "\(directory)/\(expectedFilename)"
+  return (true, outputFile)
 }
 
 /// Validates and sets the source path.
@@ -118,20 +169,19 @@ func validateSource(_ path: String?) -> String {
     }
     return absoluteSource
   } else {
-    guard let defaultSource = findDefaultSource() else {
+    guard let defaultSource = findAllXCStringsFiles(in: projectRoot).first else {
       fatalError("No .xcstrings file found in project root and no source provided.")
     }
     return defaultSource
   }
 }
 
-/// Validates and sets the destination path, ensuring it's within project root.
+/// Validates and sets the destination path.
 func validateDestination(_ path: String?, projectRoot: String, pluginMode: Bool) -> String {
-  let destination = path ?? setupDefaultDestination()
+  let destination = path ?? "\(projectRoot)/Resources/Strings+Generated.swift"
   let absoluteDestination = (destination as NSString).isAbsolutePath ? destination : "\(projectRoot)/\(destination)"
   let outputDirectory = (absoluteDestination as NSString).deletingLastPathComponent
 
-  // Only enforce project root check if not in plugin mode
   if !pluginMode {
     let projectRootURL = URL(fileURLWithPath: projectRoot).standardized
     let outputDirURL = URL(fileURLWithPath: outputDirectory).standardized
@@ -152,93 +202,145 @@ func validateDestination(_ path: String?, projectRoot: String, pluginMode: Bool)
   return absoluteDestination
 }
 
-// MARK: - Main Logic
+// MARK: - Generation Function
 
-// Step 1: Handle config
-if let configPath = configArg, let (source, destination) = loadConfig(from: configPath, isArg: configArg != nil) {
-  xcstringsPath = source
-  outputFilePath = destination
-} else if let (source, destination) = loadConfig(from: "TypeLocXC.yml") {
-  xcstringsPath = source
-  outputFilePath = destination
-} else if positionalArgs.count == 2 {
-  xcstringsPath = positionalArgs[0]
-  outputFilePath = positionalArgs[1]
-} else {
-  // No config or positional args; use defaults later
-  xcstringsPath = "" // Will be set by validateSource
-  outputFilePath = "" // Will be set by validateDestination
+func generateOutput(from xcstringsPath: String, to outputFilePath: String) {
+  guard let checksum = computeSHA256(of: xcstringsPath) else {
+    fatalError("Failed to compute checksum for \(xcstringsPath)")
+  }
+
+  guard let data = try? Data(contentsOf: URL(fileURLWithPath: xcstringsPath)),
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let strings = json["strings"] as? [String: Any] else {
+    fatalError("Failed to read or parse .xcstrings file at \(xcstringsPath)")
+  }
+
+  var output = """
+    // Checksum: \(checksum)
+    // Generated from: \(xcstringsPath)
+    // Auto-generated file for type-safe access to .xcstrings
+    import Foundation
+
+    /// Type-safe access to localized strings from `Localizable.xcstrings`.
+    /// Automatically generated by `TypeLocXC.swift`. Do not edit manually.
+    ///
+    /// The `L10n` enum provides functions for each string key in `Localizable.xcstrings`.
+    /// - Keys with dots (e.g., "GameOver.backToMain") are converted to underscores (e.g., `GameOver_backToMain`).
+    /// - For simple strings without format specifiers, the function takes no parameters.
+    /// - For strings with format specifiers (`%d`, `%@`, `%f`), the function includes labeled parameters (`p1`, `p2`, etc.) with types `Int`, `String`, `Double`, respectively.
+    /// - For plural strings defined with variations in `.xcstrings`, pass the count as the first parameter (`count: Int`), followed by additional parameters if needed.
+    ///
+    /// Example usage:
+    /// ```swift
+    /// // Simple string
+    /// let mainMenu = L10n.GameOver_backToMain()  // "Main Menu"
+    ///
+    /// // Parameterized string
+    /// let score = L10n.HUD_Label_score(p1: 42)   // "Score: 42"
+    ///
+    /// // Plural string (assuming "apple_count" is<|control374|> with plurals)
+    /// let oneApple = L10n.apple_count(count: 1)     // "1 apple"
+    /// let manyApples = L10n.apple_count(count: 5)   // "5 apples"
+    /// ```
+    ///
+    /// Supported format specifiers:
+    /// - `%@`: `String`
+    /// - `%d`, `%i`: `Int`
+    /// - `%f`: `Double`
+    /// - `%s`: `String` (C-style string)
+
+    enum L10n {
+    """
+
+  for (key, value) in strings {
+    guard let valueDict = value as? [String: Any],
+          let localizations = valueDict["localizations"] as? [String: Any],
+          let enLocalization = localizations["en"] as? [String: Any] else {
+      continue
+    }
+
+    let safeKey = key.replacingOccurrences(of: ".", with: "_")
+
+    if let variation = enLocalization["variation"] as? [String: Any],
+       let plural = variation["plural"] as? [String: Any] {
+      generatePluralFunction(for: safeKey, pluralData: plural, output: &output)
+    } else if let stringUnit = enLocalization["stringUnit"] as? [String: String],
+              let stringValue = stringUnit["value"] {
+      let specifiers = extractSpecifiers(from: stringValue)
+      let parameters = generateParameters(for: specifiers)
+      let arguments = generateArguments(for: specifiers)
+
+      if specifiers.isEmpty {
+        output += """
+                    
+                    static func \(safeKey)() -> String {
+                        return NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
+                    }
+                    """
+      } else {
+        output += """
+                    
+                    static func \(safeKey)(\(parameters)) -> String {
+                        return String(format: NSLocalizedString("\(key)", tableName: "Localizable", comment: ""), \(arguments))
+                    }
+                    """
+      }
+    }
+  }
+
+  output += "\n}\n"
+
+  do {
+    try output.write(toFile: outputFilePath, atomically: true, encoding: .utf8)
+    print("✅ Generated \(outputFilePath) successfully!")
+  } catch {
+    fatalError("Failed to write to \(outputFilePath): \(error)")
+  }
 }
 
-// Step 2: Validate and override with source and destination arguments
-xcstringsPath = validateSource(sourceArg)
-outputFilePath = validateDestination(destinationArg, projectRoot: projectRoot, pluginMode: pluginMode)
+// MARK: - String Generation Helpers
 
-print("Using source: \(xcstringsPath)")
-print("Using destination: \(outputFilePath)")
-
-// MARK: - String Generation
-
-// Load and parse the .xcstrings file
-guard let data = try? Data(contentsOf: URL(fileURLWithPath: xcstringsPath)),
-      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-      let strings = json["strings"] as? [String: Any] else {
-  fatalError("Failed to read or parse .xcstrings file at \(xcstringsPath)")
-}
-
-// MARK: MAIN HELPER FUNCTIONS
-
-// Extract format specifiers from a string
 func extractSpecifiers(from string: String) -> [String] {
-  // Updated regex to match common printf-style specifiers
   let regex = try! NSRegularExpression(pattern: "%[@cdiouxXeEfFgGaAsSpn%]")
   let matches = regex.matches(in: string, options: [], range: NSRange(string.startIndex..., in: string))
   return matches.map { String(string[Range($0.range, in: string)!]) }
 }
 
-// Map specifiers to Swift types
 func mapSpecifierToType(_ specifier: String) -> String {
   switch specifier {
-  case "%@": return "String"           // Objects (NSString, etc.)
-  case "%c": return "Character"       // Single character
-  case "%d", "%i": return "Int"       // Signed integers
-  case "%o", "%u": return "UInt"      // Unsigned integers
-  case "%x", "%X": return "UInt"      // Hexadecimal (treated as unsigned)
-  case "%e", "%E", "%f", "%F": return "Double" // Floating-point (Double for precision)
-  case "%g", "%G": return "Double"    // General floating-point
-  case "%a", "%A": return "Double"    // Hex floating-point
-  case "%s": return "String"          // C-style string
-  case "%p": return "UnsafeRawPointer" // Pointer (rare in localization)
-  case "%%": return ""                // Literal %, no parameter needed
+  case "%@": return "String"
+  case "%c": return "Character"
+  case "%d", "%i": return "Int"
+  case "%o", "%u", "%x", "%X": return "UInt"
+  case "%e", "%E", "%f", "%F", "%g", "%G", "%a", "%A": return "Double"
+  case "%s": return "String"
+  case "%p": return "UnsafeRawPointer"
+  case "%%": return ""
   default:
     print("Warning: Unknown specifier '\(specifier)', defaulting to Any")
-    return "Any"                    // Fallback for unrecognized specifiers
+    return "Any"
   }
 }
 
-// Generate labeled parameters (e.g., "p1: Int, p2: String")
 func generateParameters(for specifiers: [String]) -> String {
   specifiers.enumerated().map { (index, specifier) in
     let type = mapSpecifierToType(specifier)
     if type.isEmpty { return "" }
     return "p\(index + 1): \(type)"
   }
-  .filter { !$0.isEmpty } // Remove empty entries (e.g., for %%)
+  .filter { !$0.isEmpty }
   .joined(separator: ", ")
 }
 
-// Generate arguments for String(format:) (e.g., "p1, p2")
 func generateArguments(for specifiers: [String]) -> String {
   specifiers.enumerated()
-    .filter { mapSpecifierToType($1) != "" } // Exclude %% (no parameter)
+    .filter { mapSpecifierToType($1) != "" }
     .map { index, _ in "p\(index + 1)" }
     .joined(separator: ", ")
 }
 
-// Generate a function for plural strings
 func generatePluralFunction(for key: String, pluralData: [String: Any], output: inout String) {
   let countParam = "count: Int"
-  // Assume all plural variations have the same specifiers; use the first category to detect them
   if let firstCategory = pluralData.keys.first,
      let categoryData = pluralData[firstCategory] as? [String: Any],
      let stringUnit = categoryData["stringUnit"] as? [String: String],
@@ -251,134 +353,94 @@ func generatePluralFunction(for key: String, pluralData: [String: Any], output: 
     let argList = ["count"] + (arguments.isEmpty ? [] : [arguments])
 
     output += """
-        
-    static func \(key)(\(paramString)) -> String {
-        let format = NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
-        return String.localizedStringWithFormat(format, \(argList.joined(separator: ", ")))
-    }
-"""
+            
+            static func \(key)(\(paramString)) -> String {
+                let format = NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
+                return String.localizedStringWithFormat(format, \(argList.joined(separator: ", ")))
+            }
+            """
   } else {
     output += """
-        
-    static func \(key)(\(countParam)) -> String {
-        let format = NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
-        return String.localizedStringWithFormat(format, count)
-    }
-"""
+            
+            static func \(key)(\(countParam)) -> String {
+                let format = NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
+                return String.localizedStringWithFormat(format, count)
+            }
+            """
   }
 }
 
-// MARK: - Output Generation
+// MARK: - Main Logic
 
-var output = """
-// Auto-generated file for type-safe access to .xcstrings
-import Foundation
+var autoMode = false
 
-/// Type-safe access to localized strings from `Localizable.xcstrings`.
-/// Automatically generated by `TypeLocXC.swift`. Do not edit manually.
-///
-/// The `L10n` enum provides functions for each string key in `Localizable.xcstrings`.
-/// - Keys with dots (e.g., "GameOver.backToMain") are converted to underscores (e.g., `GameOver_backToMain`).
-/// - For simple strings without format specifiers, the function takes no parameters.
-/// - For strings with format specifiers (`%d`, `%@`, `%f`), the function includes labeled parameters (`p1`, `p2`, etc.) with types `Int`, `String`, `Double`, respectively.
-/// - For plural strings defined with variations in `.xcstrings`, pass the count as the first parameter (`count: Int`), followed by additional parameters if needed.
-///
-/// Example usage:
-/// ```swift
-/// // Simple string
-/// let mainMenu = L10n.GameOver_backToMain()  // "Main Menu"
-///
-/// // Parameterized string
-/// let score = L10n.HUD_Label_score(p1: 42)   // "Score: 42"
-///
-/// // Plural string (assuming "apple_count" is<|control374|> with plurals)
-/// let oneApple = L10n.apple_count(count: 1)     // "1 apple"
-/// let manyApples = L10n.apple_count(count: 5)   // "5 apples"
-/// ```
-///
-/// Supported format specifiers:
-/// - `%@`: `String`
-/// - `%d`, `%i`: `Int`
-/// - `%f`: `Double`
-/// - `%s`: `String` (C-style string)
+if let configPath = configArg, let (source, destination) = loadConfig(from: configPath, isArg: configArg != nil) {
+  xcstringsPath = source
+  outputFilePath = destination
+} else if let (source, destination) = loadConfig(from: "TypeLocXC.yml") {
+  xcstringsPath = source
+  outputFilePath = destination
+} else if positionalArgs.count == 2 {
+  xcstringsPath = positionalArgs[0]
+  outputFilePath = positionalArgs[1]
+} else if let source = sourceArg, let destination = destinationArg {
+  xcstringsPath = source
+  outputFilePath = destination
+} else {
+  autoMode = true
+}
 
-enum L10n {
-"""
-
-// Process each string key
-for (key, value) in strings {
-  guard let valueDict = value as? [String: Any],
-        let localizations = valueDict["localizations"] as? [String: Any],
-        let enLocalization = localizations["en"] as? [String: Any] else {
-    continue
+if autoMode {
+  if !isProjectRoot(projectRoot) {
+    fatalError("Please run the script from the project root directory containing .xcodeproj")
   }
-
-  let safeKey = key.replacingOccurrences(of: ".", with: "_")
-
-  if let variation = enLocalization["variation"] as? [String: Any],
-     let plural = variation["plural"] as? [String: Any] {
-    // Handle plural strings
-    generatePluralFunction(for: safeKey, pluralData: plural, output: &output)
-  } else if let stringUnit = enLocalization["stringUnit"] as? [String: String],
-            let stringValue = stringUnit["value"] {
-    // Handle simple or formatted strings
-    let specifiers = extractSpecifiers(from: stringValue)
-    let parameters = generateParameters(for: specifiers)
-    let arguments = generateArguments(for: specifiers)
-
-    if specifiers.isEmpty {
-      output += """
-          
-    static func \(safeKey)() -> String {
-        return NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
-    }
-"""
+  let xcstringsFiles = findAllXCStringsFiles(in: projectRoot)
+  if xcstringsFiles.isEmpty {
+    fatalError("No .xcstrings files found in project directory: \(projectRoot)")
+  }
+  let existingGeneratedFiles = findAllGeneratedFiles(in: projectRoot)
+  for xcstringsFile in xcstringsFiles {
+    let (needsGeneration, outputFile) = shouldGenerate(xcstringsFile: xcstringsFile, existingGeneratedFiles: existingGeneratedFiles)
+    if needsGeneration {
+      generateOutput(from: xcstringsFile, to: outputFile)
     } else {
-      output += """
-          
-    static func \(safeKey)(\(parameters)) -> String {
-        return String(format: NSLocalizedString("\(key)", tableName: "Localizable", comment: ""), \(arguments))
-    }
-"""
+      print("Skipping \(outputFile) as it is up to date.")
     }
   }
-}
-
-output += "\n}\n"
-
-// Write the output file
-do {
-  try output.write(toFile: outputFilePath, atomically: true, encoding: .utf8)
-  print("✅ Generated \(outputFilePath) successfully!")
-} catch {
-  fatalError("Failed to write to \(outputFilePath): \(error)")
+} else {
+  xcstringsPath = validateSource(xcstringsPath)
+  outputFilePath = validateDestination(outputFilePath, projectRoot: projectRoot, pluginMode: pluginMode)
+  generateOutput(from: xcstringsPath, to: outputFilePath)
 }
 
 // MARK: - Help Message
 
-func helpMessage() -> String { """
-Usage: TypeLocXC [OPTIONS] [SOURCE DESTINATION]
-
-Generate type-safe Swift code from an .xcstrings file.
-
-Options:
-  --source <file>        Specify the input .xcstrings file
-  --destination <file>   Specify the output Swift file
-  --config <file>        Use a custom YAML config file (e.g., config.yml)
-  --help, -?             Display this help message
-
-Positional Arguments:
-  SOURCE                 Input .xcstrings file (optional if --source is used)
-  DESTINATION            Output Swift file (optional if --destination is used)
-
-If no arguments or config are provided, the script searches for a TypeLocXC.yml
-in the project root. If absent, it finds the first .xcstrings file and outputs to
-Resources/Strings+Generated.swift, creating the Resources directory if needed.
-
-Examples:
-  TypeLocXC Strings.xcstrings Output/Strings.swift
-  TypeLocXC --source Custom.xcstrings --destination Generated.swift
-  TypeLocXC --config myconfig.yml
-  TypeLocXC --help
-"""
+func helpMessage() -> String {
+    """
+    Usage: TypeLocXC [OPTIONS] [SOURCE DESTINATION]
+    
+    Generate type-safe Swift code from .xcstrings files.
+    
+    Options:
+      --source <file>        Specify the input .xcstrings file
+      --destination <file>   Specify the output Swift file
+      --config <file>        Use a custom YAML config file (e.g., config.yml)
+      --plugin-mode          Run in plugin mode (used by SPM/Xcode build tool)
+      --help, -?             Display this help message
+    
+    Positional Arguments:
+      SOURCE                 Input .xcstrings file (optional if --source is used)
+      DESTINATION            Output Swift file (optional if --destination is used)
+    
+    Behavior:
+      - If run with --plugin-mode, processes files as specified by the plugin.
+      - If run without parameters, enters auto mode: finds all .xcstrings files in the project
+        and generates <name>+generated.swift files in the same directory.
+      - Otherwise, uses config, positional arguments, or defaults to generate a single file.
+    
+    Examples:
+      TypeLocXC --source Custom.xcstrings --destination Generated.swift
+      TypeLocXC --config myconfig.yml
+      TypeLocXC (runs in auto mode)
+    """
 }

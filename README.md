@@ -10,38 +10,38 @@ The TypeLocXC Swift package provides a convenient way to generate type-safe acce
 - Handles format specifiers like `%s`,  %d, %`@  etc., with appropriate Swift types.
 
 ## Prerequisites
-- Swift 5.5 or later.
+- Swift 5.9 or later.
 - An Xcode project with at least one `.xcstrings` file.
 
 ## Installation
 1. In Xcode, go to **File > Add Packages**.
 2. Enter `https://github.com/JohnnyD1776/TypeLocXC.git`
 3. Select latest version.
+4. Select a target for TypeLocXC
 
-## Usage
-Add this to a Run Script Build Phase:
-``bash
-TOOL_PATH="${BUILD_DIR}/../../SourcePackages/checkouts/TypeLocXC/.build/release/TypeLocXC"
-"$TOOL_PATH""
-``
+## Running as a Plugin in XCode
+TypeLocXC includes a plugin to automatically build corresponding Type Safe references for each xcstrings file. To enable the plugin:
+1. Select your Target Build Phase
+2. Add TypeLocXCPlugin to `Run Build Tool Plugins`
+3. When you initially build, the plugin will fail permissions
+4. In Build Report Navigator, Select TypeLocXCPlugin and enable Run permissions
 
 #### Note: You will need to run the Build atleast once before Type Safe entries are accessible. 
 
-#### Add the Generated File
-1. Drag the generated `Strings+Generated.swift` file into your Xcode project.
-2. Ensure it's added to your target.
+## Running from the command line
+You can run TypeLocXC from the command line with parameters.
+
+1. open the `TypeLocXC Package directory`.
+2. run `swift build --configuration release`
+3. from your  XCode Project directory, run `[TypeLocXC Package directory]/.build/release/TypeLocXC`
+
+#### Note: Add the Generated File to your project target.
 
 ## Configuration (Optional)
 Create a `TypeLocXC.yml` file in your project root to customize the script behavior:
 ``yaml
 input: "path/to/strings.xcstrings"
 output: "Resources/Strings+Generated.swift"
-``
-
-If you'd like to use a custom named configuration, update the Build script: 
-``bash
-TOOL_PATH="${BUILD_DIR}/../../SourcePackages/checkouts/TypeLocXC/.build/release/TypeLocXC"
-"$TOOL_PATH" --config "${SRCROOT}/YOUR_CONFIGURATION_FILE.yml"
 ``
 
 ### Automatic Detection
