@@ -11,6 +11,7 @@ The TypeLocXC Swift package provides a convenient way to generate type-safe acce
 
 ## Prerequisites
 - Swift 5.9 or later.
+- Minimum iOS target 13+
 - An Xcode project with at least one `.xcstrings` file.
 
 ## Installation
@@ -20,11 +21,13 @@ The TypeLocXC Swift package provides a convenient way to generate type-safe acce
 4. Select a target for TypeLocXC
 
 ## Running as a Plugin in XCode
-TypeLocXC includes a plugin to automatically build corresponding Type Safe references for each xcstrings file. To enable the plugin:
-1. Select your Target Build Phase
-2. Add TypeLocXCPlugin to `Run Build Tool Plugins`
-3. When you initially build, the plugin will fail permissions
-4. In Build Report Navigator, Select TypeLocXCPlugin and enable Run permissions
+TypeLocXC includes a plugin to automatically build corresponding Type Safe references for each xcstrings file. 
+
+To enable the plugin:
+
+1. Select your Target Build Phase and add TypeLocXCPlugin to `Run Build Tool Plugins`
+2. When you initially build, the plugin will fail permissions...
+3. In Build Report Navigator, Select TypeLocXCPlugin and enable Run permissions
 
 #### Note: You will need to run the Build atleast once before Type Safe entries are accessible. 
 
@@ -48,8 +51,10 @@ output: "Resources/Strings+Generated.swift"
 If no arguments or config file are provided:
 - The script auto-detects the project root (looking for `.xcodeproj or `.xcworkspace`).
 - It then looks for a `TypeLocXC.ypml` file in the project root.
-- If no config is found, it defaults to the first `.xcstrings` file it finds and outputs to `Resources/Strings+Generated.swift`.
-- If the `Resources` folder doesn't exist, the script creates it.
+- If no config is found, matches all `.xcstrings` files and generates output to the matched file location
+
+## Command Parameters
+For command parameters see `TypeLocXC --help`
 
 ## Usage of L10n Enum
 
@@ -70,15 +75,17 @@ let message = L10n.greeting("World") // Returns "Hello, World!"
 ``
 
 #### Supported Format Specifiers
-- `%@
-: `String`
-- `%d`, `%i`
-: `Int`
-- `%f`
-: `Double`
-- `%s`
-: `String` (C-style string)
+- `%@`: `String`
+- `%c`: `Character`
+- `%d`, `%i`: `Int`
+- `%o`, `%u`, `%x`, `%X`: `UInt`
+- `%e`, `%E`, `%f`, `%F`, `%g`, `%G`, `%a`, `%A`: `Double`
+- `%s`: `String`
+- `%p`: `UnsafeRawPointer`
+- `%%`: No argument (literal percent sign)
+
+Note: For any unsupported specifiers, the type defaults to `Any`, and a warning is printed.
 
 ## Notes
 - Ensure the `.xcstrings` file is well-formed.
-- The script overrrites the output file if it exists.
+- The script updates the output file if it exists.
