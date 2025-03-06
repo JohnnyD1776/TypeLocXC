@@ -1,6 +1,5 @@
 import Foundation
 import Yams
-import CryptoKit
 
 // MARK: - Argument Parsing
 
@@ -112,11 +111,29 @@ func findAllGeneratedFiles(in directory: String) -> [String] {
 
 /// Computes SHA256 checksum of a file.
 func computeSHA256(of file: String) -> String? {
-  guard let data = try? Data(contentsOf: URL(fileURLWithPath: file)) else {
+  // Create a Process to run the shasum command
+  let process = Process()
+  process.launchPath = "/usr/bin/shasum" // Path to shasum on macOS
+  process.arguments = ["-a", "256", file] // -a 256 specifies SHA256
+
+  // Set up a pipe to capture the output
+  let pipe = Pipe()
+  process.standardOutput = pipe
+
+  // Launch the process and wait for it to complete
+  process.launch()
+  process.waitUntilExit()
+
+  // Read the output
+  let data = pipe.fileHandleForReading.readDataToEndOfFile()
+  guard let output = String(data: data, encoding: .utf8) else {
     return nil
   }
-  let hash = SHA256.hash(data: data)
-  return hash.compactMap { String(format: "%02x", $0) }.joined()
+
+  // The output looks like: "hash_value  file_path"
+  // Split and take the first component (the hash)
+  let components = output.components(separatedBy: " ")
+  return components.first?.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 /// Extracts checksum from the generated file and returns it along with the source path.
