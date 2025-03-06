@@ -110,6 +110,7 @@ func findAllGeneratedFiles(in directory: String) -> [String] {
   return generatedFiles
 }
 
+
 /// Computes SHA256 checksum of a file.
 func computeSHA256(of file: String) -> String? {
   guard let data = try? Data(contentsOf: URL(fileURLWithPath: file)) else {
