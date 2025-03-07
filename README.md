@@ -8,7 +8,8 @@ The TypeLocXC Swift package provides a convenient way to generate type-safe acce
 - Converts `.xcstrings` files into a type-safe `Llon` enum.
 - Supports configuration via a `TypeLocXC.ypml` file.
 - Auto-detects project root and `.xcstrings` files if no arguments are provided.
-- Creates the `Resources` directory if it doesn't exist during auto-detection.
+- Creates the `[LocalisedFile]+generated.xcstrings` in the same directory as the source file.
+- Recognises moved `[LocalisedFile]+generated.xcstrings` files and maintains updated changes from source.
 - Handles format specifiers like `%s`,  %d, %`@  etc., with appropriate Swift types.
 
 ## Prerequisites
