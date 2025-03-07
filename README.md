@@ -2,6 +2,8 @@
 
 The TypeLocXC Swift package provides a convenient way to generate type-safe access to localized strings from an .xcstrings file in your Xcode project. This guide will walk you through the process of integrating the package into your project, setting up a build script and using it with or without a configuration file.
 
+![TypeLocXC](https://repository-images.githubusercontent.com/940288022/bbdb32bb-ead1-4ce7-947c-6b5daeb3583d)
+
 ## Features
 - Converts `.xcstrings` files into a type-safe `Llon` enum.
 - Supports configuration via a `TypeLocXC.ypml` file.
