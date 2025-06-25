@@ -11,6 +11,7 @@ import Foundation
 struct CodeGenerator {
 
   /// Create the Type Safe swift File Output
+  /// Create the Type Safe swift File Output
   static func generateOutput(from xcstringsPath: String, to outputFilePath: String) {
     guard let checksum = FileHandler.computeSHA256(of: xcstringsPath) else {
       fatalError("Failed to compute checksum for \(xcstringsPath)")
@@ -29,35 +30,29 @@ struct CodeGenerator {
         import Foundation
         
         /// The `L10n` enum provides functions for each string key in `Localizable.xcstrings`.
-        /// - Keys with dots (e.g., "GameOver.backToMain") are converted to underscores (e.g., `GameOver_backToMain`).
+        /// - Keys with special characters (e.g., "%", "$") are sanitized and converted to underscores.
         /// - For simple strings without format specifiers, the function takes no parameters.
-        /// - For strings with format specifiers (`%d`, `%@`, `%f`), the function includes labeled parameters (`p1`, `p2`, etc.) with types `Int`, `String`, `Double`, respectively.
-        /// - For plural strings defined with variations in `.xcstrings`, pass the count as the first parameter (`count: Int`), followed by additional parameters if needed.
+        /// - For strings with format specifiers (`%d`, `%@`, `%f`), the function includes labeled parameters (`p1`, `p2`, etc.) with appropriate types.
+        /// - For plural strings, pass the count as the first parameter (`count: Int`), followed by additional parameters if needed.
         ///
         /// Example usage:
         /// ```swift
-        /// // Simple string
         /// let mainMenu = L10n.GameOver_backToMain()  // "Main Menu"
-        ///
-        /// // Parameterized string
-        /// let score = L10n.HUD_Label_score(p1: 42)   // "Score: 42"
-        ///
-        /// // Plural string (assuming "apple_count" is defined with plurals)
-        /// let oneApple = L10n.apple_count(count: 1)     // "1 apple"
-        /// let manyApples = L10n.apple_count(count: 5)   // "5 apples"
+        /// let score = L10n.HUD_Label_score_Int(p1: 42)   // "Score: 42"
+        /// let pages = L10n.Page_lld_of_lld_Int64_Int64(p1: 1, p2: 5)  // "Page 1 of 5"
+        /// let oneApple = L10n.apple_count_Int(count: 1)     // "1 apple"
         /// ```
         ///
         /// Supported format specifiers:
         /// - `%@`: `String`
         /// - `%c`: `Character`
         /// - `%d`, `%i`: `Int`
+        /// - `%lld`: `Int64`
         /// - `%o`, `%u`, `%x`, `%X`: `UInt`
-        /// - `%e`, `%E`, `%f`, `%F`, `%g`, `%G`, `%a`, `%A`: `Double`
+        /// - `%f`, `%e`, `%g`, etc.: `Double`
         /// - `%s`: `String`
         /// - `%p`: `UnsafeRawPointer`
         /// - `%%`: No argument (literal percent sign)
-        ///
-        /// Note: For any unsupported specifiers, the type defaults to `Any`, and a warning is printed.
         
         enum L10n {
         """
@@ -69,14 +64,23 @@ struct CodeGenerator {
         continue
       }
 
-      let safeKey = key.replacingOccurrences(of: ".", with: "_")
-
       if let variation = enLocalization["variation"] as? [String: Any],
          let plural = variation["plural"] as? [String: Any] {
-        generatePluralFunction(for: safeKey, pluralData: plural, output: &output)
+        if let firstCategory = plural.keys.first,
+           let categoryData = plural[firstCategory] as? [String: Any],
+           let stringUnit = categoryData["stringUnit"] as? [String: String],
+           let stringValue = stringUnit["value"] {
+          let specifiers = extractSpecifiers(from: stringValue)
+          let safeKey = sanitizeKey(key, specifiers: specifiers)
+          generatePluralFunction(for: safeKey, pluralData: plural, output: &output)
+        } else {
+          let safeKey = sanitizeKey(key, specifiers: [])
+          generatePluralFunction(for: safeKey, pluralData: plural, output: &output)
+        }
       } else if let stringUnit = enLocalization["stringUnit"] as? [String: String],
                 let stringValue = stringUnit["value"] {
         let specifiers = extractSpecifiers(from: stringValue)
+        let safeKey = sanitizeKey(key, specifiers: specifiers)
         let parameters = generateParameters(for: specifiers)
         let arguments = generateArguments(for: specifiers)
 
@@ -109,25 +113,61 @@ struct CodeGenerator {
   }
 
   private static func extractSpecifiers(from string: String) -> [String] {
-    let regex = try! NSRegularExpression(pattern: "%[@cdiouxXeEfFgGaAsSpn%]")
+    let regex = try! NSRegularExpression(pattern: "%[^diouxXfFeEgGaAcCsSpn%]*[diouxXfFeEgGaAcCsSpn%]")
     let matches = regex.matches(in: string, options: [], range: NSRange(string.startIndex..., in: string))
     return matches.map { String(string[Range($0.range, in: string)!]) }
   }
 
+
   private static func mapSpecifierToType(_ specifier: String) -> String {
-    switch specifier {
-    case "%@": return "String"
-    case "%c": return "Character"
-    case "%d", "%i": return "Int"
-    case "%o", "%u", "%x", "%X": return "UInt"
-    case "%e", "%E", "%f", "%F", "%g", "%G", "%a", "%A": return "Double"
-    case "%s": return "String"
-    case "%p": return "UnsafeRawPointer"
-    case "%%": return ""
+    // Handle positional specifiers (e.g., %1$lld) by focusing on the type part
+    let typePart = specifier.components(separatedBy: CharacterSet(charactersIn: "0123456789$")).last ?? specifier
+    let typeChar = typePart.last
+    switch typeChar {
+    case "@": return "String"
+    case "c": return "Character"
+    case "d", "i": return "Int"
+    case "u", "o", "x", "X": return "UInt"
+    case "f", "F", "e", "E", "g", "G", "a", "A": return "Double"
+    case "s": return "String"
+    case "p": return "UnsafeRawPointer"
+    case "%": return "" // For %%
+    case "l":
+      if typePart.hasSuffix("ld") || typePart.hasSuffix("lld") {
+        return "Int64"
+      } else if typePart.hasSuffix("lu") || typePart.hasSuffix("llu") {
+        return "UInt64"
+      } else {
+        return "Any"
+      }
     default:
-      print("Warning: Unknown specifier '\(specifier)', defaulting to Any")
+      print("Warning: Unknown type character '\(typePart)' in specifier '\(specifier)', defaulting to Any")
       return "Any"
     }
+  }
+
+  private static func sanitizeKey(_ key: String, specifiers: [String]) -> String {
+    var safeKey = key
+    for specifier in specifiers {
+      safeKey = safeKey.replacingOccurrences(of: specifier, with: "")
+    }
+    safeKey = safeKey.replacingOccurrences(of: ".", with: "_")
+    let specialChars = CharacterSet.punctuationCharacters.union(.symbols).subtracting(CharacterSet(charactersIn: "_"))
+    safeKey = safeKey.components(separatedBy: specialChars).joined(separator: "_")
+    safeKey = safeKey.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+    while safeKey.contains("__") {
+      safeKey = safeKey.replacingOccurrences(of: "__", with: "_")
+    }
+    if !specifiers.isEmpty {
+      let types = specifiers.map { mapSpecifierToType($0) }.filter { !$0.isEmpty }
+      if !types.isEmpty {
+        safeKey += "_\(types.joined(separator: "_"))"
+      }
+    }
+    if let firstChar = safeKey.first, firstChar.isNumber {
+      safeKey = "_\(safeKey)"
+    }
+    return String(safeKey.unicodeScalars.filter { CharacterSet.letters.union(.decimalDigits).union(.init(charactersIn: "_")).contains($0) })
   }
 
   private static func generateParameters(for specifiers: [String]) -> String {
