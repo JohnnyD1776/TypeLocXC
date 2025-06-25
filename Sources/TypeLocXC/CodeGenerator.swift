@@ -8,10 +8,15 @@
 import Foundation
 
 // MARK: - Generation Function
+//
+//  CodeGenerator.swift
+//  TypeLocXC
+//
+//  Created by John Durcan on 06/03/2025.
+//
 struct CodeGenerator {
 
-  /// Create the Type Safe swift File Output
-  /// Create the Type Safe swift File Output
+  /// Create the Type Safe Swift File Output
   static func generateOutput(from xcstringsPath: String, to outputFilePath: String) {
     guard let checksum = FileHandler.computeSHA256(of: xcstringsPath) else {
       fatalError("Failed to compute checksum for \(xcstringsPath)")
@@ -29,20 +34,12 @@ struct CodeGenerator {
         // Auto-generated file for type-safe access to .xcstrings. Do not edit manually.
         import Foundation
         
-        /// The `L10n` enum provides functions for each string key in `Localizable.xcstrings`.
-        /// - Keys with special characters (e.g., "%", "$") are sanitized and converted to underscores.
-        /// - For simple strings without format specifiers, the function takes no parameters.
-        /// - For strings with format specifiers (`%d`, `%@`, `%f`), the function includes labeled parameters (`p1`, `p2`, etc.) with appropriate types.
-        /// - For plural strings, pass the count as the first parameter (`count: Int`), followed by additional parameters if needed.
-        ///
-        /// Example usage:
-        /// ```swift
-        /// let mainMenu = L10n.GameOver_backToMain()  // "Main Menu"
-        /// let score = L10n.HUD_Label_score_Int(p1: 42)   // "Score: 42"
-        /// let pages = L10n.Page_lld_of_lld_Int64_Int64(p1: 1, p2: 5)  // "Page 1 of 5"
-        /// let oneApple = L10n.apple_count_Int(count: 1)     // "1 apple"
-        /// ```
-        ///
+        /// The `L10n` enum provides type-safe access to localized strings.
+        /// - Nested enums reflect the key hierarchy (e.g., `L10n.ViewName.Section.title`).
+        /// - Simple strings are accessed via `static let` properties (e.g., `L10n.ViewName.Section.title`).
+        /// - Parameterized strings use `static func` with parameters (e.g., `L10n.ViewName.Section.string(p1: "something")`).
+        /// - Plural strings include a `count` parameter (e.g., `L10n.ViewName.Section.itemsCount(count: 5)`).
+        /// 
         /// Supported format specifiers:
         /// - `%@`: `String`
         /// - `%c`: `Character`
@@ -53,56 +50,93 @@ struct CodeGenerator {
         /// - `%s`: `String`
         /// - `%p`: `UnsafeRawPointer`
         /// - `%%`: No argument (literal percent sign)
-        
+
         enum L10n {
         """
 
-    for (key, value) in strings {
-      guard let valueDict = value as? [String: Any],
-            let localizations = valueDict["localizations"] as? [String: Any],
-            let enLocalization = localizations["en"] as? [String: Any] else {
-        continue
+    let keys = strings.keys.sorted()
+    var currentPath: [String] = []
+    var indent = 4 // Starting inside enum L10n
+    var usedNames: [String: Set<String>] = [:]
+
+    for key in keys {
+      let parts = splitKey(key)
+      let commonLength = zip(currentPath, parts).prefix(while: { $0 == $1 }).count
+
+      // Close enums no longer needed
+      for _ in commonLength..<currentPath.count {
+        indent -= 4
+        output += String(repeating: " ", count: indent) + "}\n"
       }
 
-      if let variation = enLocalization["variation"] as? [String: Any],
-         let plural = variation["plural"] as? [String: Any] {
-        if let firstCategory = plural.keys.first,
-           let categoryData = plural[firstCategory] as? [String: Any],
-           let stringUnit = categoryData["stringUnit"] as? [String: String],
-           let stringValue = stringUnit["value"] {
-          let specifiers = extractSpecifiers(from: stringValue)
-          let safeKey = sanitizeKey(key, specifiers: specifiers)
-          generatePluralFunction(for: safeKey, pluralData: plural, output: &output)
-        } else {
-          let safeKey = sanitizeKey(key, specifiers: [])
-          generatePluralFunction(for: safeKey, pluralData: plural, output: &output)
+      // Open new enums for new parts
+      for i in commonLength..<parts.count - 1 {
+        let enumPart = enumName(from: parts[i])
+        let pathKey = (currentPath + parts[0...i]).joined(separator: ".")
+        if usedNames[pathKey] == nil {
+          usedNames[pathKey] = Set<String>()
         }
-      } else if let stringUnit = enLocalization["stringUnit"] as? [String: String],
-                let stringValue = stringUnit["value"] {
-        let specifiers = extractSpecifiers(from: stringValue)
-        let safeKey = sanitizeKey(key, specifiers: specifiers)
-        let parameters = generateParameters(for: specifiers)
-        let arguments = generateArguments(for: specifiers)
+        var uniqueEnumName = enumPart
+        var counter = 1
+        while usedNames[pathKey]!.contains(uniqueEnumName) {
+          uniqueEnumName = "\(enumPart)_\(counter)"
+          counter += 1
+        }
+        usedNames[pathKey]!.insert(uniqueEnumName)
+        output += String(repeating: " ", count: indent) + "enum \(uniqueEnumName) {\n"
+        indent += 4
+      }
 
-        if specifiers.isEmpty {
-          output += """
-                            
-                            static func \(safeKey)() -> String {
-                                return NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
-                            }
-                            """
-        } else {
-          output += """
-                            
-                            static func \(safeKey)(\(parameters)) -> String {
-                                return String(format: NSLocalizedString("\(key)", tableName: "Localizable", comment: ""), \(arguments))
-                            }
-                            """
+      // Generate the leaf
+      let baseName = propertyName(from: parts.last!)
+      let pathKey = currentPath.joined(separator: ".")
+      if usedNames[pathKey] == nil {
+        usedNames[pathKey] = Set<String>()
+      }
+      var uniqueName = baseName
+      var counter = 1
+      while usedNames[pathKey]!.contains(uniqueName) {
+        uniqueName = "\(baseName)_\(counter)"
+        counter += 1
+      }
+      usedNames[pathKey]!.insert(uniqueName)
+
+      if let valueDict = strings[key] as? [String: Any],
+         let localizations = valueDict["localizations"] as? [String: Any],
+         let enLocalization = localizations["en"] as? [String: Any] {
+        if let variation = enLocalization["variation"] as? [String: Any],
+           let plural = variation["plural"] as? [String: Any] {
+          generatePluralFunction(for: uniqueName, pluralData: plural, output: &output, indent: indent, key: key)
+        } else if let stringUnit = enLocalization["stringUnit"] as? [String: String],
+                  let stringValue = stringUnit["value"] {
+          let specifiers = extractSpecifiers(from: stringValue)
+          if specifiers.isEmpty {
+            output += String(repeating: " ", count: indent) + "static let \(uniqueName) = NSLocalizedString(\"\(key)\", tableName: \"Localizable\", comment: \"\")\n"
+          } else {
+            let parameters = generateParameters(for: specifiers)
+            let arguments = generateArguments(for: specifiers)
+            output += String(repeating: " ", count: indent) + "static func \(uniqueName)(\(parameters)) -> String {\n"
+            output += String(repeating: " ", count: indent + 4) + "return String(format: NSLocalizedString(\"\(key)\", tableName: \"Localizable\", comment: \"\"), \(arguments))\n"
+            output += String(repeating: " ", count: indent) + "}\n"
+          }
         }
+      }
+
+      currentPath = parts
+    }
+
+    // Close remaining enums
+    for _ in currentPath {
+      if indent > 0 {
+        indent -= 4
+        output += String(repeating: " ", count: indent) + "}\n"
+      } else {
+        print("Warning: Attempted to close more enums than were opened. Indent is already zero.")
+        break
       }
     }
 
-    output += "\n}\n"
+    output += "}\n"
 
     do {
       try output.write(toFile: outputFilePath, atomically: true, encoding: .utf8)
@@ -112,15 +146,50 @@ struct CodeGenerator {
     }
   }
 
+  // MARK: - Helper Functions
+
+  /// Split key into parts using dots and underscores as separators
+  private static func splitKey(_ key: String) -> [String] {
+    let separators = CharacterSet(charactersIn: "._")
+    return key.components(separatedBy: separators).filter { !$0.isEmpty }
+  }
+
+  /// Sanitize identifier by removing invalid characters
+  private static func sanitizeIdentifier(_ s: String) -> String {
+    let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "_"))
+    let sanitized = s.unicodeScalars.filter { allowed.contains($0) }.map { String($0) }.joined()
+    return sanitized.isEmpty ? "unknown" : sanitized
+  }
+
+  /// Format part as an enum name (first letter uppercase)
+  private static func enumName(from part: String) -> String {
+    let sanitized = sanitizeIdentifier(part)
+    let name = sanitized.prefix(1).uppercased() + sanitized.dropFirst()
+    if name.first?.isNumber == true {
+      return "_\(name)"
+    }
+    return name
+  }
+
+  /// Format part as a property/function name (first letter lowercase)
+  private static func propertyName(from part: String) -> String {
+    let sanitized = sanitizeIdentifier(part)
+    let name = sanitized.prefix(1).lowercased() + sanitized.dropFirst()
+    if name.first?.isNumber == true {
+      return "_\(name)"
+    }
+    return name
+  }
+
+  /// Extract format specifiers from a string
   private static func extractSpecifiers(from string: String) -> [String] {
     let regex = try! NSRegularExpression(pattern: "%[^diouxXfFeEgGaAcCsSpn%]*[diouxXfFeEgGaAcCsSpn%]")
     let matches = regex.matches(in: string, options: [], range: NSRange(string.startIndex..., in: string))
     return matches.map { String(string[Range($0.range, in: string)!]) }
   }
 
-
+  /// Map format specifier to Swift type
   private static func mapSpecifierToType(_ specifier: String) -> String {
-    // Handle positional specifiers (e.g., %1$lld) by focusing on the type part
     let typePart = specifier.components(separatedBy: CharacterSet(charactersIn: "0123456789$")).last ?? specifier
     let typeChar = typePart.last
     switch typeChar {
@@ -131,7 +200,7 @@ struct CodeGenerator {
     case "f", "F", "e", "E", "g", "G", "a", "A": return "Double"
     case "s": return "String"
     case "p": return "UnsafeRawPointer"
-    case "%": return "" // For %%
+    case "%": return ""
     case "l":
       if typePart.hasSuffix("ld") || typePart.hasSuffix("lld") {
         return "Int64"
@@ -146,40 +215,18 @@ struct CodeGenerator {
     }
   }
 
-  private static func sanitizeKey(_ key: String, specifiers: [String]) -> String {
-    var safeKey = key
-    for specifier in specifiers {
-      safeKey = safeKey.replacingOccurrences(of: specifier, with: "")
-    }
-    safeKey = safeKey.replacingOccurrences(of: ".", with: "_")
-    let specialChars = CharacterSet.punctuationCharacters.union(.symbols).subtracting(CharacterSet(charactersIn: "_"))
-    safeKey = safeKey.components(separatedBy: specialChars).joined(separator: "_")
-    safeKey = safeKey.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-    while safeKey.contains("__") {
-      safeKey = safeKey.replacingOccurrences(of: "__", with: "_")
-    }
-    if !specifiers.isEmpty {
-      let types = specifiers.map { mapSpecifierToType($0) }.filter { !$0.isEmpty }
-      if !types.isEmpty {
-        safeKey += "_\(types.joined(separator: "_"))"
-      }
-    }
-    if let firstChar = safeKey.first, firstChar.isNumber {
-      safeKey = "_\(safeKey)"
-    }
-    return String(safeKey.unicodeScalars.filter { CharacterSet.letters.union(.decimalDigits).union(.init(charactersIn: "_")).contains($0) })
-  }
-
+  /// Generate function parameters from specifiers
   private static func generateParameters(for specifiers: [String]) -> String {
     specifiers.enumerated().map { (index, specifier) in
       let type = mapSpecifierToType(specifier)
       if type.isEmpty { return "" }
-      return "p\(index + 1): \(type)"
+      return "_ p\(index + 1): \(type)"
     }
     .filter { !$0.isEmpty }
     .joined(separator: ", ")
   }
 
+  /// Generate arguments for String(format:)
   private static func generateArguments(for specifiers: [String]) -> String {
     specifiers.enumerated()
       .filter { mapSpecifierToType($1) != "" }
@@ -187,8 +234,9 @@ struct CodeGenerator {
       .joined(separator: ", ")
   }
 
-  private static func generatePluralFunction(for key: String, pluralData: [String: Any], output: inout String) {
-    let countParam = "count: Int"
+  /// Generate plural function with count and optional additional parameters
+  private static func generatePluralFunction(for name: String, pluralData: [String: Any], output: inout String, indent: Int, key: String) {
+    let countParam = "_ count: Int"
     if let firstCategory = pluralData.keys.first,
        let categoryData = pluralData[firstCategory] as? [String: Any],
        let stringUnit = categoryData["stringUnit"] as? [String: String],
@@ -200,21 +248,15 @@ struct CodeGenerator {
       let paramString = params.joined(separator: ", ")
       let argList = ["count"] + (arguments.isEmpty ? [] : [arguments])
 
-      output += """
-                    
-                    static func \(key)(\(paramString)) -> String {
-                        let format = NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
-                        return String.localizedStringWithFormat(format, \(argList.joined(separator: ", ")))
-                    }
-                    """
+      output += String(repeating: " ", count: indent) + "static func \(name)(\(paramString)) -> String {\n"
+      output += String(repeating: " ", count: indent + 4) + "let format = NSLocalizedString(\"\(key)\", tableName: \"Localizable\", comment: \"\")\n"
+      output += String(repeating: " ", count: indent + 4) + "return String.localizedStringWithFormat(format, \(argList.joined(separator: ", ")))\n"
+      output += String(repeating: " ", count: indent) + "}\n"
     } else {
-      output += """
-                    
-                    static func \(key)(\(countParam)) -> String {
-                        let format = NSLocalizedString("\(key)", tableName: "Localizable", comment: "")
-                        return String.localizedStringWithFormat(format, count)
-                    }
-                    """
+      output += String(repeating: " ", count: indent) + "static func \(name)(\(countParam)) -> String {\n"
+      output += String(repeating: " ", count: indent + 4) + "let format = NSLocalizedString(\"\(key)\", tableName: \"Localizable\", comment: \"\")\n"
+      output += String(repeating: " ", count: indent + 4) + "return String.localizedStringWithFormat(format, count)\n"
+      output += String(repeating: " ", count: indent) + "}\n"
     }
   }
 }
