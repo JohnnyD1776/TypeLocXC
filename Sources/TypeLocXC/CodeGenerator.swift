@@ -181,7 +181,7 @@ struct CodeGenerator {
     if sanitized.isEmpty {
       sanitized = "unknown"
     }
-    if keywords.contains(sanitized) {
+    if keywords.contains(sanitized.lowercased()) {
       sanitized += "_"
     }
     if sanitized.first?.isNumber == true {
