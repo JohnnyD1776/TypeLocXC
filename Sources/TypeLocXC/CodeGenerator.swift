@@ -155,30 +155,58 @@ struct CodeGenerator {
   }
 
   /// Sanitize identifier by removing invalid characters
-  private static func sanitizeIdentifier(_ s: String) -> String {
-    let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "_"))
-    let sanitized = s.unicodeScalars.filter { allowed.contains($0) }.map { String($0) }.joined()
-    return sanitized.isEmpty ? "unknown" : sanitized
+  private static func sanitizeIdentifier(_ s: String, isEnum: Bool = false) -> String {
+    let keywords: Set<String> = [
+      "class", "deinit", "enum", "extension", "func", "import", "init", "let", "operator", "protocol",
+      "static", "struct", "subscript", "typealias", "var", "break", "case", "continue", "default", "do",
+      "else", "fallthrough", "for", "if", "in", "return", "switch", "where", "while", "as", "false", "is",
+      "nil", "self", "Self", "super", "true", "_", "associativity", "convenience", "dynamic", "didSet",
+      "final", "get", "infix", "inout", "lazy", "left", "mutating", "none", "nonmutating", "optional",
+      "override", "postfix", "precedence", "prefix", "required", "right", "set", "Type", "unowned", "weak",
+      "willSet"
+    ]
+
+    var sanitized = ""
+    var lastWasUnderscore = false
+    for char in s {
+      if char.isLetter || char.isNumber {
+        sanitized.append(char)
+        lastWasUnderscore = false
+      } else if !lastWasUnderscore {
+        sanitized.append("_")
+        lastWasUnderscore = true
+      }
+    }
+    sanitized = sanitized.trimmingCharacters(in: .init(charactersIn: "_"))
+    if sanitized.isEmpty {
+      sanitized = "unknown"
+    }
+    if keywords.contains(sanitized) {
+      sanitized += "_"
+    }
+    if sanitized.first?.isNumber == true {
+      sanitized = "_\(sanitized)"
+    }
+    if isEnum {
+      if let first = sanitized.first, first.isLowercase {
+        sanitized = String(first.uppercased()) + sanitized.dropFirst()
+      }
+    } else {
+      if let first = sanitized.first, first.isUppercase {
+        sanitized = String(first.lowercased()) + sanitized.dropFirst()
+      }
+    }
+    return sanitized
   }
 
   /// Format part as an enum name (first letter uppercase)
   private static func enumName(from part: String) -> String {
-    let sanitized = sanitizeIdentifier(part)
-    let name = sanitized.prefix(1).uppercased() + sanitized.dropFirst()
-    if name.first?.isNumber == true {
-      return "_\(name)"
-    }
-    return name
+    return sanitizeIdentifier(part, isEnum: true)
   }
 
   /// Format part as a property/function name (first letter lowercase)
   private static func propertyName(from part: String) -> String {
-    let sanitized = sanitizeIdentifier(part)
-    let name = sanitized.prefix(1).lowercased() + sanitized.dropFirst()
-    if name.first?.isNumber == true {
-      return "_\(name)"
-    }
-    return name
+    return sanitizeIdentifier(part, isEnum: false)
   }
 
   /// Extract format specifiers from a string
