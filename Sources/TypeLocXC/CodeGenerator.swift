@@ -122,7 +122,7 @@ struct CodeGenerator {
         }
       }
 
-      currentPath = parts
+      currentPath = Array(parts.dropLast())
     }
 
     // Close remaining enums
